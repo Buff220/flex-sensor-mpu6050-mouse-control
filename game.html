@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Hamster Defense</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #000;
+            cursor: crosshair;
+        }
+        
+        canvas {
+            display: block;
+        }
+        
+        #ui {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: white;
+            pointer-events: none;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.8);
+            z-index: 10;
+        }
+        
+        #crosshair {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 20px;
+            height: 20px;
+            border: 2px solid #00ff00;
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+            z-index: 5;
+        }
+        
+        #score-board {
+            font-size: 28px;
+            font-weight: bold;
+            color: #fffa65;
+        }
+        
+        #instructions {
+            font-size: 14px;
+            opacity: 0.9;
+            margin-top: 5px;
+            background: rgba(0, 0, 0, 0.4);
+            padding: 5px;
+            border-radius: 4px;
+        }
+        
+        #game-over {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(20, 0, 0, 0.9);
+            color: white;
+            padding: 40px;
+            border-radius: 20px;
+            text-align: center;
+            display: none;
+            pointer-events: all;
+            border: 2px solid #ff4757;
+            z-index: 100;
+        }
+        
+        button {
+            background: #ff4757;
+            border: none;
+            padding: 12px 24px;
+            color: white;
+            font-size: 18px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin-top: 20px;
+            transition: transform 0.2s;
+        }
+        
+        button:hover {
+            transform: scale(1.1);
+            background: #ff6b81;
+        }
+        /* Flash effect when shooting */
+        
+        #flash {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: white;
+            opacity: 0;
+            pointer-events: none;
+            z-index: 1;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div id="flash"></div>
+    <div id="ui">
+        <div id="score-board">HAMSTERS STOPPED: <span id="score">0</span></div>
+        <div id="instructions">Look Around (160° Limit) | Left Click to Fire</div>
+    </div>
+
+    <div id="crosshair"></div>
+
+    <div id="game-over">
+        <h1 style="color: #ff4757;">DEFENSE BREACHED</h1>
+        <p>The hamsters got too close!</p>
+        <p style="font-size: 24px;">Final Score: <span id="final-score">0</span></p>
+        <button onclick="restartGame()">REPLOY DEFENSES</button>
+    </div>
+
+    <script>
+        const ENEMY_URLS = [
+            'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTYFCogBZmGtyF-eol14xgWwWdtU-a2rkJA5Q&s',
+            'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTVYaYJdx1G7Rlnm4rTW9dt8ic-RNFzaX7S3g&s',
+            'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTdIbe77Gx8BxFBzIdEDYoF_izhgL4hX3EeRQ&s',
+            'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSOeKTadkUNvga2Ea8wQfmiwExvryPpEmWwPA&s'
+        ];
+
+        let scene, camera, renderer, raycaster;
+        let enemies = [];
+        let score = 0;
+        let isGameOver = false;
+        let spawnRate = 3200; // Faster spawning
+        let lastSpawnTime = 0;
+        let gunGroup, gunModel;
+
+        // Rotation limits
+        let lon = 0,
+            lat = 0;
+        const MAX_LON = 45; // Total 160 degrees
+        const MIN_LON = -45;
+
+        function init() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x0a0a0f);
+            scene.fog = new THREE.Fog(0x0a0a0f, 5, 40);
+
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+
+            renderer = new THREE.WebGLRenderer({
+                antialias: true
+            });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            document.body.appendChild(renderer.domElement);
+
+            raycaster = new THREE.Raycaster();
+
+            // Lights
+            scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+            const spot = new THREE.PointLight(0xffffff, 1);
+            spot.position.set(0, 5, 5);
+            scene.add(spot);
+
+            // Ground - Dark metal look
+            const groundGeo = new THREE.PlaneGeometry(100, 100);
+            const groundMat = new THREE.MeshPhongMaterial({
+                color: 0x111111,
+                specular: 0x050505
+            });
+            const ground = new THREE.Mesh(groundGeo, groundMat);
+            ground.rotation.x = -Math.PI / 2;
+            ground.position.y = -2;
+            scene.add(ground);
+
+            const grid = new THREE.GridHelper(100, 40, 0x00ff00, 0x222222);
+            grid.position.y = -1.99;
+            scene.add(grid);
+
+            // Create Pistol
+            createGun();
+
+            window.addEventListener('resize', onWindowResize);
+            document.addEventListener('mousemove', onMouseMove);
+            document.addEventListener('mousedown', onMouseDown);
+
+            animate(0);
+        }
+
+        function createGun() {
+            gunGroup = new THREE.Group();
+
+            // Simple blocky pistol model
+            const bodyGeo = new THREE.BoxGeometry(0.5, 0.8, 2);
+            const gunMat = new THREE.MeshPhongMaterial({
+                color: 0x222222
+            });
+            const body = new THREE.Mesh(bodyGeo, gunMat);
+
+            const handleGeo = new THREE.BoxGeometry(0.4, 1.2, 0.6);
+            const handle = new THREE.Mesh(handleGeo, gunMat);
+            handle.position.y = -0.6;
+            handle.position.z = 0.5;
+            handle.rotation.x = 0.2;
+
+            gunModel = new THREE.Group();
+            gunModel.add(body);
+            gunModel.add(handle);
+
+            // Position gun in view (bottom right)
+            gunModel.position.set(1.2, -1.2, -2.5);
+            gunGroup.add(gunModel);
+            scene.add(gunGroup);
+        }
+
+        function onMouseMove(event) {
+            if (isGameOver) return;
+            const sensitivity = 0.15;
+            lon += event.movementX * sensitivity;
+            lat -= event.movementY * sensitivity;
+
+            // Constrain rotation to ~160 degrees
+            lon = Math.max(MIN_LON, Math.min(MAX_LON, lon));
+            lat = Math.max(-30, Math.min(45, lat));
+        }
+
+        function onMouseDown() {
+            if (isGameOver) return;
+
+            // Recoil animation
+            gunModel.position.z += 0.4;
+            gunModel.rotation.x -= 0.2;
+
+            // Muzzle flash UI
+            const flash = document.getElementById('flash');
+            flash.style.opacity = '0.3';
+            setTimeout(() => flash.style.opacity = '0', 50);
+
+            // Shooting logic
+            const mouse = new THREE.Vector2(0, 0);
+            raycaster.setFromCamera(mouse, camera);
+            const intersects = raycaster.intersectObjects(enemies, true);
+
+            if (intersects.length > 0) {
+                const hitEnemy = intersects[0].object.parent;
+                removeEnemy(hitEnemy);
+                score++;
+                document.getElementById('score').innerText = score;
+                spawnRate = Math.max(400, 1200 - (score * 20));
+            }
+        }
+
+        function createEnemy() {
+            const textureLoader = new THREE.TextureLoader();
+            const randomImg = ENEMY_URLS[Math.floor(Math.random() * ENEMY_URLS.length)];
+
+            const texture = textureLoader.load(randomImg);
+            const material = new THREE.SpriteMaterial({
+                map: texture,
+                transparent: true
+            });
+            const sprite = new THREE.Sprite(material);
+
+            // Enemies spawn closer now (between 15 and 25 units)
+            const angleDeg = (Math.random() * (MAX_LON - MIN_LON) + MIN_LON);
+            const angleRad = THREE.MathUtils.degToRad(angleDeg - 90);
+            const distance = 20 + Math.random() * 5;
+
+            const group = new THREE.Group();
+            group.position.x = Math.cos(angleRad) * distance;
+            group.position.z = Math.sin(angleRad) * distance;
+            group.position.y = -0.5 + Math.random();
+
+            // Random offset for "scuttling" movement
+            group.userData = {
+                phase: Math.random() * Math.PI * 2,
+                speedMultiplier: 1 + (Math.random() * 0.5),
+                sideSwing: 0.5 + Math.random()
+            };
+
+            sprite.scale.set(3, 3, 1);
+            group.add(sprite);
+
+            scene.add(group);
+            enemies.push(group);
+        }
+
+        function removeEnemy(obj) {
+            scene.remove(obj);
+            const index = enemies.indexOf(obj);
+            if (index > -1) enemies.splice(index, 1);
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function restartGame() {
+            score = 0;
+            spawnRate = 1200;
+            isGameOver = false;
+            lon = 0;
+            lat = 0;
+            document.getElementById('score').innerText = "0";
+            document.getElementById('game-over').style.display = "none";
+            enemies.forEach(e => scene.remove(e));
+            enemies = [];
+        }
+
+        function animate(time) {
+            requestAnimationFrame(animate);
+
+            if (!isGameOver) {
+                // Update Camera
+                const phi = THREE.MathUtils.degToRad(90 - lat);
+                const theta = THREE.MathUtils.degToRad(lon - 90);
+
+                const target = new THREE.Vector3();
+                target.x = Math.sin(phi) * Math.cos(theta);
+                target.y = Math.cos(phi);
+                target.z = Math.sin(phi) * Math.sin(theta);
+                camera.lookAt(target);
+
+                // Attach gun to camera view
+                gunGroup.position.copy(camera.position);
+                gunGroup.rotation.copy(camera.rotation);
+
+                // Gun smoothing/recoil recovery
+                gunModel.position.z = THREE.MathUtils.lerp(gunModel.position.z, -2.5, 0.1);
+                gunModel.rotation.x = THREE.MathUtils.lerp(gunModel.rotation.x, 0, 0.1);
+
+                // Spawn logic
+                if (time - lastSpawnTime > spawnRate) {
+                    createEnemy();
+                    lastSpawnTime = time;
+                }
+
+                // Enemy Movement (Scuttling)
+                enemies.forEach(enemy => {
+                    const toPlayer = new THREE.Vector3().subVectors(camera.position, enemy.position);
+                    const dist = toPlayer.length();
+
+                    // Base move towards player
+                    const speed = (0.06 + (score * 0.001)) * enemy.userData.speedMultiplier;
+                    const moveStep = toPlayer.normalize().multiplyScalar(speed);
+                    enemy.position.add(moveStep);
+
+                    // Add lateral "scuttle" movement (calibrating)
+                    const lateral = new THREE.Vector3(-moveStep.z, 0, moveStep.x).normalize();
+                    const swing = Math.sin(time * 0.005 + enemy.userData.phase) * 0.05 * enemy.userData.sideSwing;
+                    enemy.position.add(lateral.multiplyScalar(swing));
+
+                    // Game Over perimeter (tightened)
+                    if (dist < 3.5) endGame();
+                });
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        function endGame() {
+            isGameOver = true;
+            document.getElementById('game-over').style.display = "block";
+            document.getElementById('final-score').innerText = score;
+            document.exitPointerLock();
+        }
+
+        document.body.onclick = () => {
+            if (!isGameOver) document.body.requestPointerLock();
+        };
+
+        window.onload = init;
+    </script>
+</body>
+
+</html>
