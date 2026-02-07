@@ -65,7 +65,7 @@ void calibrateMPU() {
 
 void setup() {
   Serial.begin(115200);
-  Wire.begin(D2,D1);
+  Wire.begin(21,20);
   Wire.setClock(100000);
   
   mpu.initialize();
